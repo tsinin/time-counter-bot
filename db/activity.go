@@ -103,6 +103,27 @@ func GetFullActivityNameByID(activityID int64, userID common.UserID) (string, er
 	return "", errors.New("Activity not found: " + strconv.FormatInt(activityID, 10))
 }
 
+// BuildFullActivityName строит полный путь активности из уже загруженного списка,
+// поднимаясь по цепочке ParentActivityID.
+func BuildFullActivityName(activities []Activity, activityID int64) (string, error) {
+	activityMap := make(map[int64]Activity, len(activities))
+	for _, a := range activities {
+		activityMap[a.ID] = a
+	}
+
+	var parts []string
+	currentID := activityID
+	for currentID != -1 {
+		act, ok := activityMap[currentID]
+		if !ok {
+			return "", errors.New("Activity not found: " + strconv.FormatInt(currentID, 10))
+		}
+		parts = append([]string{act.Name}, parts...)
+		currentID = act.ParentActivityID
+	}
+	return strings.Join(parts, " / "), nil
+}
+
 // GetSimpleActivities возвращает список активностей пользователя.
 func GetSimpleActivities(userID common.UserID, isMuted *bool, hasMutedLeaves *bool) ([]Activity, error) {
 	var activities []Activity

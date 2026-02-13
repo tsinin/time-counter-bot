@@ -35,6 +35,14 @@ func notifyUser(user db.User) {
 
 	_, err = tg.Bot.Send(msgconf)
 	if err != nil {
+		if tg.IsBotBlockedError(err) {
+			log.Printf("Bot was blocked by user %d, disabling notifications", user.ID)
+			user.TimerEnabled = false
+			if updateErr := db.UpdateUser(user); updateErr != nil {
+				log.Printf("Failed to disable timer for blocked user %d: %v", user.ID, updateErr)
+			}
+			return
+		}
 		log.Fatal(err)
 	}
 }
@@ -74,7 +82,7 @@ func LogUserActivityCallback(callback *tgbotapi.CallbackQuery) {
 			log.Fatal(err)
 		}
 
-		activityName, err := db.GetFullActivityNameByID(nodeID, common.UserID(callback.From.ID))
+		activityName, err := db.BuildFullActivityName(activities, nodeID)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -90,14 +98,8 @@ func LogUserActivityCallback(callback *tgbotapi.CallbackQuery) {
 			log.Fatal(err)
 		}
 	} else {
-		user, err := db.GetUserByID(common.UserID(callback.From.ID))
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		isMuted := false
-		keyboard := buildActivitiesKeyboardMarkupForUser(
-			*user, nodeID, &isMuted, nil, "activity_log", getStandardActivitiesLastRow())
+		keyboard := buildActivitiesKeyboardMarkup(
+			activities, timerMinutes, nodeID, "activity_log", getStandardActivitiesLastRow())
 
 		_, err = tg.Bot.Send(
 			tgbotapi.NewEditMessageTextAndMarkup(
@@ -139,14 +141,9 @@ func AddNewActivityCallback(callback *tgbotapi.CallbackQuery) {
 	registerNewActivity(*user)
 }
 
-func buildActivitiesKeyboardMarkupForUser(
-	user db.User, parentActivityID int64, isMuted *bool, hasMutedLeaves *bool,
+func buildActivitiesKeyboardMarkup(
+	activities []db.Activity, timerMinutes int64, parentActivityID int64,
 	callbackCommand string, lastRow []tgbotapi.InlineKeyboardButton) tgbotapi.InlineKeyboardMarkup {
-	activities, err := db.GetSimpleActivities(user.ID, isMuted, hasMutedLeaves)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	rows := make([][]tgbotapi.InlineKeyboardButton, 0)
 
 	for _, activity := range activities {
@@ -155,7 +152,7 @@ func buildActivitiesKeyboardMarkupForUser(
 		}
 
 		leafIDStr := fmt.Sprintf(
-			"%s %d %d", callbackCommand, activity.ID, user.TimerMinutes.Int64,
+			"%s %d %d", callbackCommand, activity.ID, timerMinutes,
 		)
 		buttons := make([]tgbotapi.InlineKeyboardButton, 0)
 		buttons = append(
@@ -171,6 +168,17 @@ func buildActivitiesKeyboardMarkupForUser(
 	rows = append(rows, lastRow)
 
 	return tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func buildActivitiesKeyboardMarkupForUser(
+	user db.User, parentActivityID int64, isMuted *bool, hasMutedLeaves *bool,
+	callbackCommand string, lastRow []tgbotapi.InlineKeyboardButton) tgbotapi.InlineKeyboardMarkup {
+	activities, err := db.GetSimpleActivities(user.ID, isMuted, hasMutedLeaves)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return buildActivitiesKeyboardMarkup(activities, user.TimerMinutes.Int64, parentActivityID, callbackCommand, lastRow)
 }
 
 func getStandardActivitiesLastRow() []tgbotapi.InlineKeyboardButton {

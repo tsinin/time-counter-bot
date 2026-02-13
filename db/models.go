@@ -12,7 +12,7 @@ type Activity struct {
 	ID               int64  `gorm:"primaryKey;autoIncrement"`
 	UserID           int64  `gorm:"not null;index"`
 	Name             string `gorm:"not null"`
-	ParentActivityID int64  `gorm:"not null"`
+	ParentActivityID int64  `gorm:"not null;index"`
 	IsLeaf           bool   `gorm:"not null"`
 	IsMuted          bool   `gorm:"default:false;not null"`
 	HasMutedLeaves   bool   `gorm:"default:false;not null"`

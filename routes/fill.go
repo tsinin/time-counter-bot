@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,55 @@ func openAIKey() string {
 	return strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 }
 
+const fillMaxLinesInMessage = 45
+
+// formatSlotIntervalLocal — интервал слота в локальном времени пользователя: «ДД.ММ.ГГГГ ЧЧ:ММ–ЧЧ:ММ».
+func formatSlotIntervalLocal(user db.User, slotStartUTC time.Time, intervalMin int64) string {
+	start := UserLocalWallClock(user, slotStartUTC.UTC())
+	end := start.Add(time.Duration(intervalMin) * time.Minute)
+	const d = "02.01.2006"
+	const t = "15:04"
+	if start.Year() == end.Year() && start.YearDay() == end.YearDay() {
+		return fmt.Sprintf("%s %s–%s", start.Format(d), start.Format(t), end.Format(t))
+	}
+	return fmt.Sprintf("%s %s – %s %s", start.Format(d), start.Format(t), end.Format(d), end.Format(t))
+}
+
+// buildUnfilledSlotsBulletList — маркированный список интервалов (без активности), для приветствия /fill.
+func buildUnfilledSlotsBulletList(user db.User, unfilled []db.ActivityLog, maxLines int) (text string, total int) {
+	total = len(unfilled)
+	if total == 0 {
+		return "", 0
+	}
+	byMid := make(map[int64]db.ActivityLog, len(unfilled))
+	for _, u := range unfilled {
+		byMid[u.MessageID] = u
+	}
+	mids := make([]int64, 0, len(byMid))
+	for mid := range byMid {
+		mids = append(mids, mid)
+	}
+	sort.Slice(mids, func(i, j int) bool {
+		return byMid[mids[i]].Timestamp.Before(byMid[mids[j]].Timestamp)
+	})
+	var b strings.Builder
+	nShow := len(mids)
+	if nShow > maxLines {
+		nShow = maxLines
+	}
+	for i := 0; i < nShow; i++ {
+		u := byMid[mids[i]]
+		line := formatSlotIntervalLocal(user, u.Timestamp, u.IntervalMinutes)
+		b.WriteString("• ")
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	if len(mids) > maxLines {
+		b.WriteString(fmt.Sprintf("… и ещё %d слотов.\n", len(mids)-maxLines))
+	}
+	return b.String(), total
+}
+
 // FillCommand начинает сценарий /fill.
 func FillCommand(message *tgbotapi.Message) {
 	tgUser := message.From
@@ -75,11 +125,35 @@ func FillCommand(message *tgbotapi.Message) {
 		return
 	}
 
+	user, err := db.GetUserByID(userID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	since := time.Now().Add(-unfilledSlotsLookback)
+	unfilled, err := db.GetUnfilledActivityLogs(userID, since)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(unfilled) == 0 {
+		_, _ = tg.Bot.Send(tgbotapi.NewMessage(message.Chat.ID,
+			"Нет незаполненных слотов за последние 7 дней — описывать нечего."))
+		return
+	}
+
+	list, total := buildUnfilledSlotsBulletList(*user, unfilled, fillMaxLinesInMessage)
+	intro := fmt.Sprintf(
+		"Сейчас не заполнены %d напоминаний (локальное время, интервалы как в настройках бота). Опиши, чем ты занимался в этих промежутках — текстом или голосовым:\n\n%s\n"+
+			"Я сопоставлю это с этими слотами и покажу план на подтверждение.\n"+
+			"Отмена: /fill_cancel",
+		total,
+		list,
+	)
+	if len(intro) > 4000 {
+		intro = intro[:3990] + "…"
+	}
+
 	common.UserStates[userID] = common.UserState{State: common.InFill, WaitingChannel: nil}
-	_, err := tg.Bot.Send(tgbotapi.NewMessage(message.Chat.ID,
-		"Опиши текстом или голосовым, чем ты занимался в пропущенных слотах. "+
-			"Я сопоставлю это с незаполненными напоминаниями за последние 7 дней и покажу план.\n"+
-			"Отмена: /fill_cancel"))
+	_, err = tg.Bot.Send(tgbotapi.NewMessage(message.Chat.ID, intro))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -304,10 +378,48 @@ func runFillWithDescription(chatID int64, userID common.UserID, description stri
 	}
 	pendingFillsMu.Unlock()
 
-	var b strings.Builder
-	b.WriteString("Вот что я понял:\n")
+	slotByMID := make(map[int64]db.ActivityLog, len(unfilled))
+	for _, u := range unfilled {
+		slotByMID[u.MessageID] = u
+	}
+	midToName := make(map[int64]string)
 	for _, it := range items {
-		b.WriteString(fmt.Sprintf("- %d слот(ов) → \"%s\"\n", len(it.MessageIDs), it.ActivityName))
+		for _, mid := range it.MessageIDs {
+			midToName[mid] = it.ActivityName
+		}
+	}
+	midsSorted := make([]int64, 0, len(slotSet))
+	for mid := range slotSet {
+		midsSorted = append(midsSorted, mid)
+	}
+	sort.Slice(midsSorted, func(i, j int) bool {
+		return slotByMID[midsSorted[i]].Timestamp.Before(slotByMID[midsSorted[j]].Timestamp)
+	})
+
+	totalSlots := len(midsSorted)
+	showMids := midsSorted
+	listTruncated := false
+	if len(showMids) > fillMaxLinesInMessage {
+		showMids = showMids[:fillMaxLinesInMessage]
+		listTruncated = true
+	}
+
+	var b strings.Builder
+	b.WriteString("Проверь план — каждая строка: интервал слота (твоё локальное время) и выбранная активность:\n")
+	for _, mid := range showMids {
+		u := slotByMID[mid]
+		interval := formatSlotIntervalLocal(*user, u.Timestamp, u.IntervalMinutes)
+		b.WriteString("• ")
+		b.WriteString(interval)
+		b.WriteString(" — «")
+		b.WriteString(midToName[mid])
+		b.WriteString("»\n")
+	}
+	if listTruncated {
+		b.WriteString(fmt.Sprintf(
+			"\n(Показаны первые %d из %d слотов — лимит длины сообщения; при «Подтвердить» запишутся все %d.)\n",
+			fillMaxLinesInMessage, totalSlots, totalSlots,
+		))
 	}
 	b.WriteString("\nПодтвердить или отменить?")
 

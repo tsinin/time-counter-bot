@@ -27,7 +27,7 @@ func RegisterNewActivityCommand(message *tgbotapi.Message) {
 func registerNewActivity(user db.User) {
 	userState := common.UserStates[user.ID]
 
-	if userState.State == common.InCommand {
+	if userState.State == common.InCommand || userState.State == common.InFill {
 		_, err := bot.Bot.Send(
 			tgbotapi.NewMessage(int64(user.ChatID), "You're already executing some command"),
 		)

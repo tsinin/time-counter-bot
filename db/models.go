@@ -23,7 +23,7 @@ type Activity struct {
 type ActivityLog struct {
 	MessageID       int64     `gorm:"primaryKey;autoIncrement:false"`
 	UserID          int64     `gorm:"primaryKey;autoIncrement:false"`
-	ActivityID      int64     `gorm:"not null"`
+	ActivityID      *int64    `gorm:"index"` // nil = уведомление отправлено, активность ещё не выбрана
 	Timestamp       time.Time `gorm:"not null"`
 	IntervalMinutes int64     `gorm:"not null"`
 }
@@ -37,6 +37,8 @@ type User struct {
 	ScheduleMorningStartHour  sql.NullInt64
 	ScheduleEveningFinishHour sql.NullInt64
 	LastNotify                sql.NullTime
+	// Смещение от UTC в часах (-12..12). 0 = как раньше, часы расписания в UTC.
+	TimezoneOffset int64 `gorm:"default:0;not null"`
 }
 
 // ActivityRoute — вспомогательная структура для формирования полного пути к листовой активности.

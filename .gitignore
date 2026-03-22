@@ -1,3 +1,5 @@
 config.yaml
 database.db
 .vscode/
+.idea/
+notebooks/

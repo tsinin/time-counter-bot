@@ -89,6 +89,44 @@ func buildActivities(activities []Activity) []ActivityRoute {
 	return routes
 }
 
+// NormalizeActivityPath приводит путь к виду "A / B / C" (trim по частям).
+func NormalizeActivityPath(path string) string {
+	parts := strings.Split(path, "/")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		s := strings.TrimSpace(p)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return strings.Join(out, " / ")
+}
+
+// ResolveLeafIDByActivityPath сопоставляет строку пути с листом из дерева пользователя.
+func ResolveLeafIDByActivityPath(userID common.UserID, path string) (int64, error) {
+	want := NormalizeActivityPath(path)
+	if want == "" {
+		return 0, errors.New("empty activity path")
+	}
+	routes, err := GetFullActivities(userID, nil)
+	if err != nil {
+		return 0, err
+	}
+	wantLower := strings.ToLower(want)
+	for _, r := range routes {
+		if strings.EqualFold(NormalizeActivityPath(r.Name), want) {
+			return r.LeafID, nil
+		}
+	}
+	// запасной вариант: без учёта регистра по полной строке
+	for _, r := range routes {
+		if strings.ToLower(NormalizeActivityPath(r.Name)) == wantLower {
+			return r.LeafID, nil
+		}
+	}
+	return 0, errors.New("activity path not found: " + want)
+}
+
 // GetFullActivityNameByID возвращает полный путь активности по её ID.
 func GetFullActivityNameByID(activityID int64, userID common.UserID) (string, error) {
 	routes, err := GetFullActivities(userID, nil)

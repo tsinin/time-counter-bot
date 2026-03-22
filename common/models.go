@@ -15,6 +15,7 @@ type UserState struct {
 const (
 	Idle UserStateSimple = iota
 	InCommand
+	InFill // ожидание текста/голоса для /fill
 )
 
 var UserStates = make(map[UserID]UserState)

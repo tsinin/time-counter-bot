@@ -44,6 +44,14 @@ func SetCommands() {
 			Command:     "get_day_statistics",
 			Description: "Получить статистику за определённый период времени",
 		},
+		{
+			Command:     "fill",
+			Description: "Заполнить пропущенные слоты текстом или голосом (OpenAI)",
+		},
+		{
+			Command:     "fill_cancel",
+			Description: "Отменить режим /fill",
+		},
 	}
 
 	setCmd := tgbotapi.NewSetMyCommands(commands...)
@@ -90,9 +98,20 @@ func handleMessage(message *tgbotapi.Message) {
 	// Print to console
 	log.Printf("%s wrote %s", user.UserName, message.Text)
 
+	if message.Voice != nil {
+		if common.UserStates[userID].State == common.InFill {
+			routes.HandleFillVoice(message)
+		}
+		return
+	}
+
 	if strings.HasPrefix(message.Text, "/") {
 		handleCommand(message)
 	} else if len(message.Text) > 0 {
+		if common.UserStates[userID].State == common.InFill {
+			routes.HandleFillText(message)
+			return
+		}
 		// chech user state and send info to waiting channel
 		if common.UserStates[userID].WaitingChannel != nil {
 			*common.UserStates[userID].WaitingChannel <- message.Text
@@ -111,6 +130,7 @@ var callbackHandlers = map[string]CallbackHandler{
 	"day_stats__refresh_chart": routes.RefreshDayStatsChartCallback,
 
 	"start__set_timer_minutes":            routes.SetTimerMinutesCallback,
+	"start__set_timezone_offset":          routes.SetTimezoneOffsetCallback,
 	"start__schedule_morning_start_hour":  routes.SetScheduleMorningStartHourCallback,
 	"start__schedule_evening_finish_hour": routes.SetScheduleEveningFinishHourCallback,
 	"start__enable_notifications": func(c *tgbotapi.CallbackQuery) {
@@ -131,6 +151,10 @@ var callbackHandlers = map[string]CallbackHandler{
 
 func handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 	dataPath := strings.Split(callback.Data, " ")[0]
+	if strings.HasPrefix(dataPath, "fill__") {
+		routes.HandleFillCallback(callback)
+		return
+	}
 	if handler, ok := callbackHandlers[dataPath]; ok {
 		handler(callback)
 	} else {
@@ -138,9 +162,17 @@ func handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 	}
 }
 
+func commandRoot(text string) string {
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Split(fields[0], "@")[0]
+}
+
 // When we get a command, we react accordingly.
 func handleCommand(message *tgbotapi.Message) {
-	switch strings.Split(message.Text, " ")[0] {
+	switch commandRoot(message.Text) {
 	case "/start":
 		routes.StartCommand(message)
 
@@ -167,6 +199,12 @@ func handleCommand(message *tgbotapi.Message) {
 
 	case "/unmute_activity":
 		routes.MuteActivityCommand(message, false)
+
+	case "/fill":
+		routes.FillCommand(message)
+
+	case "/fill_cancel":
+		routes.FillCancelCommand(message)
 	}
 }
 

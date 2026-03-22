@@ -20,9 +20,45 @@ func StartCommand(message *tgbotapi.Message) {
 	msg := tgbotapi.NewMessage(
 		int64(user.ChatID),
 		"Hi! You are using Andrew's time management bot.\n"+
-			"Firstly, tell me the time interval in which you want to receive question about your activity.",
+			"First, choose your timezone as offset from UTC (hours). "+
+			"Reminder hours below will be in this local time.",
 	)
-	msg.ReplyMarkup = getStartCommandTimerIntervalsKeyboardMarkup()
+	msg.ReplyMarkup = getTimezoneOffsetKeyboardMarkup()
+
+	_, err = bot.Bot.Send(msg)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func SetTimezoneOffsetCallback(callback *tgbotapi.CallbackQuery) {
+	user, err := db.GetUserByID(common.UserID(callback.From.ID))
+	if err != nil {
+		log.Fatal(err)
+	}
+	var offset int64
+	_, err = fmt.Sscanf(callback.Data, "start__set_timezone_offset %d", &offset)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if offset < -12 || offset > 12 {
+		log.Fatalf("invalid timezone offset %d", offset)
+	}
+	user.TimezoneOffset = offset
+	err = db.UpdateUser(*user)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	msg := tgbotapi.NewEditMessageTextAndMarkup(
+		int64(user.ChatID),
+		callback.Message.MessageID,
+		fmt.Sprintf(
+			"Timezone: %s.\nNow choose how often you want to be asked what you're doing (interval between reminders).",
+			formatUTCOffsetLabel(offset),
+		),
+		getStartCommandTimerIntervalsKeyboardMarkup(),
+	)
 
 	_, err = bot.Bot.Send(msg)
 	if err != nil {
@@ -50,8 +86,10 @@ func SetTimerMinutesCallback(callback *tgbotapi.CallbackQuery) {
 		int64(user.ChatID),
 		callback.Message.MessageID,
 		fmt.Sprintf(
-			"Nice, your interval is %d minutes!\nNow tell me the hour in UTC to start sending you reminders.",
+			"Nice, your interval is %d minutes!\n"+
+				"Now choose the hour (%s) when reminders should start each day.",
 			timerMinutes,
+			formatUTCOffsetLabel(user.TimezoneOffset),
 		),
 		getScheduleMorningStartHourKeyboardMarkup(),
 	)
@@ -82,9 +120,11 @@ func SetScheduleMorningStartHourCallback(callback *tgbotapi.CallbackQuery) {
 		int64(user.ChatID),
 		callback.Message.MessageID,
 		fmt.Sprintf(
-			"Wonderful, your start hour will be %d:00 UTC!\nAnd now tell me the hour"+
-				" in UTC to finish sending reminders and send day statistics.",
+			"Start of day: %02d:00 (%s).\n"+
+				"Now choose the hour (%s) when reminders stop and day stats are offered.",
 			scheduleMorningStartHour,
+			formatUTCOffsetLabel(user.TimezoneOffset),
+			formatUTCOffsetLabel(user.TimezoneOffset),
 		),
 		getScheduleEveningFinishHourKeyboardMarkup(),
 	)
@@ -114,11 +154,11 @@ func SetScheduleEveningFinishHourCallback(callback *tgbotapi.CallbackQuery) {
 	var text string
 	var keyboardMarkup tgbotapi.InlineKeyboardMarkup
 	if user.TimerEnabled {
-		text = "You will get notifications every %d minutes, from %d:00 UTC to %d:00 UTC.\n" +
+		text = "You will get notifications every %d minutes, from %02d:00 to %02d:00 (%s).\n" +
 			"Notifications enabled! You can disable them by pressing button below."
 		keyboardMarkup = getDisableNotificationsKeyboardMarkup()
 	} else {
-		text = "Cool. You will get notifications every %d minutes, from %d:00 UTC to %d:00 UTC.\n" +
+		text = "Cool. You will get notifications every %d minutes, from %02d:00 to %02d:00 (%s).\n" +
 			"Now click the button to enable notifications."
 		keyboardMarkup = getEnableNotificationsKeyboardMarkup()
 	}
@@ -131,6 +171,7 @@ func SetScheduleEveningFinishHourCallback(callback *tgbotapi.CallbackQuery) {
 			user.TimerMinutes.Int64,
 			user.ScheduleMorningStartHour.Int64,
 			user.ScheduleEveningFinishHour.Int64,
+			formatUTCOffsetLabel(user.TimezoneOffset),
 		),
 		keyboardMarkup,
 	)
@@ -139,6 +180,13 @@ func SetScheduleEveningFinishHourCallback(callback *tgbotapi.CallbackQuery) {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func formatUTCOffsetLabel(offset int64) string {
+	if offset >= 0 {
+		return fmt.Sprintf("UTC+%d", offset)
+	}
+	return fmt.Sprintf("UTC%d", offset)
 }
 
 func EnableNotificationsCallback(callback *tgbotapi.CallbackQuery, enable bool) {
@@ -152,10 +200,12 @@ func EnableNotificationsCallback(callback *tgbotapi.CallbackQuery, enable bool) 
 		log.Fatal(err)
 	}
 
-	message := fmt.Sprintf("You will get notifications every %d minutes, from %d:00 UTC to %d:00 UTC.\n",
+	message := fmt.Sprintf(
+		"You will get notifications every %d minutes, from %02d:00 to %02d:00 (%s).\n",
 		user.TimerMinutes.Int64,
 		user.ScheduleMorningStartHour.Int64,
 		user.ScheduleEveningFinishHour.Int64,
+		formatUTCOffsetLabel(user.TimezoneOffset),
 	)
 	if enable {
 		message += "Notifications enabled!"
@@ -181,6 +231,24 @@ func EnableNotificationsCallback(callback *tgbotapi.CallbackQuery, enable bool) 
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func getTimezoneOffsetKeyboardMarkup() tgbotapi.InlineKeyboardMarkup {
+	var rows [][]tgbotapi.InlineKeyboardButton
+	var row []tgbotapi.InlineKeyboardButton
+	for o := int64(-8); o <= 8; o++ {
+		label := formatUTCOffsetLabel(o)
+		cb := fmt.Sprintf("start__set_timezone_offset %d", o)
+		row = append(row, tgbotapi.InlineKeyboardButton{Text: label, CallbackData: StringPtr(cb)})
+		if len(row) >= 4 {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
 
 func getStartCommandTimerIntervalsKeyboardMarkup() tgbotapi.InlineKeyboardMarkup {

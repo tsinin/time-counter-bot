@@ -7,6 +7,13 @@ import (
 	"TimeCounterBot/db"
 )
 
+// UserLocalWallClock переводит момент времени в «локальные часы» пользователя по его смещению от UTC.
+func UserLocalWallClock(user db.User, utc time.Time) time.Time {
+	sec := int(user.TimezoneOffset) * 3600
+	loc := time.FixedZone("user_tz", sec)
+	return utc.In(loc)
+}
+
 const DispatchInterval = time.Second * 5
 
 func isTimeInInterval(ts time.Time, startHour, finishHour int64) bool {
@@ -27,7 +34,9 @@ func processUser(user db.User, now time.Time) {
 
 	startHour := user.ScheduleMorningStartHour.Int64
 	finishHour := user.ScheduleEveningFinishHour.Int64
-	if !isTimeInInterval(now, startHour, finishHour) {
+	nowUTC := now.UTC()
+	localNow := UserLocalWallClock(user, nowUTC)
+	if !isTimeInInterval(localNow, startHour, finishHour) {
 		return
 	}
 
@@ -36,7 +45,9 @@ func processUser(user db.User, now time.Time) {
 	}
 
 	go notifyUser(user)
-	if !isTimeInInterval(now.Add(time.Minute*time.Duration(user.TimerMinutes.Int64)), startHour, finishHour) {
+	nextUTC := nowUTC.Add(time.Minute * time.Duration(user.TimerMinutes.Int64))
+	nextLocal := UserLocalWallClock(user, nextUTC)
+	if !isTimeInInterval(nextLocal, startHour, finishHour) {
 		go startDayStatsRoutine(user)
 	}
 }

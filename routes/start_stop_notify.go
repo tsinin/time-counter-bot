@@ -25,7 +25,7 @@ func NotifyCommand(message *tgbotapi.Message, start bool) {
 
 	userState := common.UserStates[userID]
 
-	if userState.State == common.InCommand {
+	if userState.State == common.InCommand || userState.State == common.InFill {
 		_, err = bot.Bot.Send(
 			tgbotapi.NewMessage(message.Chat.ID, "You're already executing some command"),
 		)
@@ -56,7 +56,7 @@ func TestNotifyCommand(message *tgbotapi.Message) {
 
 	userState := common.UserStates[userID]
 
-	if userState.State == common.InCommand {
+	if userState.State == common.InCommand || userState.State == common.InFill {
 		_, err = bot.Bot.Send(
 			tgbotapi.NewMessage(message.Chat.ID, "You're already executing some command"),
 		)

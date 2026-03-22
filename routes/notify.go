@@ -33,7 +33,7 @@ func notifyUser(user db.User) {
 	msgconf.ReplyMarkup = buildActivitiesKeyboardMarkupForUser(
 		user, -1, &isMuted, nil, "activity_log", getStandardActivitiesLastRow())
 
-	_, err = tg.Bot.Send(msgconf)
+	sentMsg, err := tg.Bot.Send(msgconf)
 	if err != nil {
 		if tg.IsBotBlockedError(err) {
 			log.Printf("Bot was blocked by user %d, disabling notifications", user.ID)
@@ -43,6 +43,17 @@ func notifyUser(user db.User) {
 			}
 			return
 		}
+		log.Fatal(err)
+	}
+
+	ts := time.Unix(int64(sentMsg.Date), 0)
+	if err := db.AddActivityLog(db.ActivityLog{
+		MessageID:       int64(sentMsg.MessageID),
+		UserID:          int64(user.ID),
+		ActivityID:      nil,
+		Timestamp:       ts,
+		IntervalMinutes: user.TimerMinutes.Int64,
+	}); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -69,11 +80,12 @@ func LogUserActivityCallback(callback *tgbotapi.CallbackQuery) {
 	}
 
 	if activities[idx].IsLeaf {
+		aid := nodeID
 		err = db.AddActivityLog(
 			db.ActivityLog{
 				MessageID:       int64(callback.Message.MessageID),
 				UserID:          callback.From.ID,
-				ActivityID:      nodeID,
+				ActivityID:      &aid,
 				Timestamp:       callback.Message.Time(),
 				IntervalMinutes: timerMinutes,
 			},

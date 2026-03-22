@@ -28,7 +28,7 @@ func GetLogDurations(userID common.UserID, start, end time.Time) (map[int64]floa
 
 	err := GormDB.Model(&ActivityLog{}).
 		Select("activity_id, COALESCE(SUM(interval_minutes), 0) as total_interval").
-		Where("user_id = ? AND timestamp BETWEEN ? AND ?", userID, start, end).
+		Where("user_id = ? AND activity_id IS NOT NULL AND timestamp BETWEEN ? AND ?", userID, start, end).
 		Group("activity_id").
 		Scan(&results).Error
 	if err != nil {
@@ -40,4 +40,20 @@ func GetLogDurations(userID common.UserID, start, end time.Time) (map[int64]floa
 		logDurations[r.ActivityID] = float64(r.TotalInterval)
 	}
 	return logDurations, nil
+}
+
+// GetUnfilledActivityLogs возвращает слоты с отправленным опросом, где активность ещё не выбрана.
+func GetUnfilledActivityLogs(userID common.UserID, since time.Time) ([]ActivityLog, error) {
+	var logs []ActivityLog
+	err := GormDB.Where("user_id = ? AND activity_id IS NULL AND timestamp >= ?", userID, since).
+		Order("timestamp ASC").
+		Find(&logs).Error
+	return logs, err
+}
+
+// SetActivityLogActivityID проставляет листовую активность для существующего слота.
+func SetActivityLogActivityID(messageID, userID, activityID int64) error {
+	return GormDB.Model(&ActivityLog{}).
+		Where("message_id = ? AND user_id = ?", messageID, userID).
+		Update("activity_id", activityID).Error
 }

@@ -56,10 +56,10 @@ func openAIKey() string {
 
 const fillMaxLinesInMessage = 45
 
-// formatSlotIntervalLocal — интервал слота в локальном времени пользователя: «ДД.ММ.ГГГГ ЧЧ:ММ–ЧЧ:ММ».
-func formatSlotIntervalLocal(user db.User, slotStartUTC time.Time, intervalMin int64) string {
-	start := UserLocalWallClock(user, slotStartUTC.UTC())
-	end := start.Add(time.Duration(intervalMin) * time.Minute)
+// formatSlotIntervalLocal — интервал слота в локальном времени: от (время сообщения − интервал) до времени сообщения.
+func formatSlotIntervalLocal(user db.User, messageTsUTC time.Time, intervalMin int64) string {
+	end := UserLocalWallClock(user, messageTsUTC.UTC())
+	start := end.Add(-time.Duration(intervalMin) * time.Minute)
 	const d = "02.01.2006"
 	const t = "15:04"
 	if start.Year() == end.Year() && start.YearDay() == end.YearDay() {

@@ -206,7 +206,9 @@ func runFillWithDescription(chatID int64, userID common.UserID, description stri
 		return
 	}
 
-	paths, err := db.GetFullActivities(userID, nil)
+	// Только немьюченные активности — как в обычных опросах, чтобы LLM не предлагала скрытые ветки.
+	isMuted := false
+	paths, err := db.GetFullActivities(userID, &isMuted)
 	if err != nil {
 		log.Fatal(err)
 	}

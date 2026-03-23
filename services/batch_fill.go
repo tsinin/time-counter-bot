@@ -47,19 +47,24 @@ func ParseFillAssignments(ctx context.Context, client *openai.Client, userDescri
 You must respond with a single JSON object only, no markdown, with this exact shape:
 {"assignments":[{"message_ids":[...integers...],"activity_path":"exact path from list"}]}
 Rules:
-- Every message_id in the slots list must appear in exactly one assignment's message_ids array (partition the slots).
+- PARTIAL fills are required when the user only described part of the timeline: include ONLY message_ids for slots that the description clearly covers. Do NOT guess, do NOT fill silence, do NOT assign slots the user did not mention.
+- Example: if two consecutive unfilled slots span 90 minutes but the user says they did X only during the last hour, assign only the slot(s) whose local_time range matches that last hour (use slot interval_minutes and local_time to decide).
+- If nothing in the description maps confidently to any slot, return {"assignments":[]}.
+- Each message_id from the slots list may appear in at most one assignment, and only if justified by the text.
 - activity_path must be copied EXACTLY from the provided list of allowed paths (same spelling, same " / " separators).
-- Merge consecutive slots that belong to the same activity into one assignment with multiple message_ids.
+- Merge consecutive slots that belong to the same activity AND the same described stretch into one assignment with multiple message_ids.
 - Order assignments by time (earlier slots first).`
 
 	userMsg := fmt.Sprintf(`Allowed leaf activity paths (use these strings exactly):
 %s
 
-Unfilled slots (message_id = Telegram message to update; local_time is start of that slot):
+Unfilled slots (message_id = Telegram message to update; local_time is start of that slot in the user's local time; interval_minutes is slot length):
 %s
 
 User description:
-%s`, string(pathsJSON), string(slotsJSON), userDescription)
+%s
+
+Remember: only output assignments for slots the user actually described; leave other slots out of the JSON entirely.`, string(pathsJSON), string(slotsJSON), userDescription)
 
 	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: chatModelFill,

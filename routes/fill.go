@@ -32,11 +32,11 @@ type ResolvedFillItem struct {
 }
 
 type pendingFillEntry struct {
-	UserID   common.UserID
-	ChatID   int64
-	Items    []ResolvedFillItem
-	Expires  time.Time
-	SlotSet  map[int64]struct{} // допустимые message_id
+	UserID  common.UserID
+	ChatID  int64
+	Items   []ResolvedFillItem
+	Expires time.Time
+	SlotSet map[int64]struct{} // допустимые message_id
 }
 
 var (
@@ -142,8 +142,8 @@ func FillCommand(message *tgbotapi.Message) {
 
 	list, total := buildUnfilledSlotsBulletList(*user, unfilled, fillMaxLinesInMessage)
 	intro := fmt.Sprintf(
-		"Сейчас не заполнены %d напоминаний (локальное время, интервалы как в настройках бота). Опиши, чем ты занимался в этих промежутках — текстом или голосовым:\n\n%s\n"+
-			"Я сопоставлю это с этими слотами и покажу план на подтверждение.\n"+
+		"Сейчас не заполнены %d напоминаний. Опиши, чем ты занимался в этих промежутках — текстом или голосовым:\n\n%s\n"+
+			"Я сопоставлю ответ со слотами выше и покажу план на подтверждение.\n"+
 			"Отмена: /fill_cancel",
 		total,
 		list,
@@ -355,15 +355,10 @@ func runFillWithDescription(chatID int64, userID common.UserID, description stri
 		})
 	}
 
-	for mid := range slotSet {
-		if _, ok := seen[mid]; !ok {
-			_, _ = tg.Bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("В плане не хватает слота message_id=%d. Попробуй описать явнее.", mid)))
-			return
-		}
-	}
-
 	if len(items) == 0 {
-		_, _ = tg.Bot.Send(tgbotapi.NewMessage(chatID, "Модель вернула пустой план."))
+		_, _ = tg.Bot.Send(tgbotapi.NewMessage(chatID,
+			"По описанию не удалось сопоставить ни один слот (или модель ничего не предложила). "+
+				"Укажи явнее, какие интервалы времени чем занимался — можно только часть пропуска."))
 		return
 	}
 
@@ -388,8 +383,9 @@ func runFillWithDescription(chatID int64, userID common.UserID, description stri
 			midToName[mid] = it.ActivityName
 		}
 	}
-	midsSorted := make([]int64, 0, len(slotSet))
-	for mid := range slotSet {
+	// В превью и подтверждении — только слоты, которые реально пойдут в план (частичное заполнение).
+	midsSorted := make([]int64, 0, len(midToName))
+	for mid := range midToName {
 		midsSorted = append(midsSorted, mid)
 	}
 	sort.Slice(midsSorted, func(i, j int) bool {
@@ -405,7 +401,8 @@ func runFillWithDescription(chatID int64, userID common.UserID, description stri
 	}
 
 	var b strings.Builder
-	b.WriteString("Проверь план — каждая строка: интервал слота (твоё локальное время) и выбранная активность:\n")
+	b.WriteString("Будут заполнены только перечисленные слоты; остальные незаполненные напоминания не меняются.\n")
+	b.WriteString("Проверь план — каждая строка: интервал слота и выбранная активность:\n")
 	for _, mid := range showMids {
 		u := slotByMID[mid]
 		interval := formatSlotIntervalLocal(*user, u.Timestamp, u.IntervalMinutes)
@@ -417,7 +414,7 @@ func runFillWithDescription(chatID int64, userID common.UserID, description stri
 	}
 	if listTruncated {
 		b.WriteString(fmt.Sprintf(
-			"\n(Показаны первые %d из %d слотов — лимит длины сообщения; при «Подтвердить» запишутся все %d.)\n",
+			"\n(Показаны первые %d из %d строк плана — лимит длины; при «Подтвердить» всё равно применятся все %d слотов из плана.)\n",
 			fillMaxLinesInMessage, totalSlots, totalSlots,
 		))
 	}
@@ -470,7 +467,7 @@ func HandleFillCallback(callback *tgbotapi.CallbackQuery) {
 
 	switch action {
 	case "fill__cancel":
-		_, _ = tg.Bot.Send(tgbotapi.NewMessage(callback.Message.Chat.ID, "Отменено, записи не менял."))
+		editFillPlanMessageFooter(callback, "\n\n— Отменено, записи не менялись.")
 		return
 	case "fill__confirm":
 		applyFillPlan(callback, entry)
@@ -479,18 +476,53 @@ func HandleFillCallback(callback *tgbotapi.CallbackQuery) {
 	}
 }
 
+var emptyInlineKeyboard = tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}}
+
+// editFillPlanMessageFooter дописывает итог к сообщению с кнопками и убирает клавиатуру.
+func editFillPlanMessageFooter(callback *tgbotapi.CallbackQuery, suffix string) {
+	if callback == nil || callback.Message == nil {
+		return
+	}
+	base := callback.Message.Text
+	newText := base + suffix
+	const tgMax = 4096
+	if len(newText) > tgMax {
+		maxBase := tgMax - len(suffix) - 4 // «…» + запас
+		if maxBase < 200 {
+			newText = "…" + suffix
+			if len(newText) > tgMax {
+				newText = newText[len(newText)-tgMax:]
+			}
+		} else {
+			newText = base[:maxBase] + "…" + suffix
+		}
+	}
+	_, err := tg.Bot.Send(tgbotapi.NewEditMessageTextAndMarkup(
+		callback.Message.Chat.ID,
+		callback.Message.MessageID,
+		newText,
+		emptyInlineKeyboard,
+	))
+	if err != nil {
+		log.Printf("editFillPlanMessageFooter: %v", err)
+	}
+}
+
 func applyFillPlan(callback *tgbotapi.CallbackQuery, entry *pendingFillEntry) {
+	if callback == nil || callback.Message == nil {
+		return
+	}
 	for _, it := range entry.Items {
 		for _, mid := range it.MessageIDs {
 			if err := db.SetActivityLogActivityID(mid, int64(entry.UserID), it.ActivityID); err != nil {
 				log.Printf("SetActivityLogActivityID %d: %v", mid, err)
-				_, _ = tg.Bot.Send(tgbotapi.NewMessage(entry.ChatID, fmt.Sprintf("Ошибка БД для message_id=%d", mid)))
+				editFillPlanMessageFooter(callback, fmt.Sprintf("\n\n— Ошибка при сохранении (message_id=%d): %v", mid, err))
 				return
 			}
 			edit := tgbotapi.NewEditMessageTextAndMarkup(
 				entry.ChatID, int(mid),
 				"Saved activity \""+it.ActivityName+"\"",
-				tgbotapi.InlineKeyboardMarkup{InlineKeyboard: make([][]tgbotapi.InlineKeyboardButton, 0)},
+				emptyInlineKeyboard,
 			)
 			if _, err := tg.Bot.Send(edit); err != nil {
 				log.Printf("edit message %d: %v (возможно старше 48ч)", mid, err)
@@ -498,17 +530,8 @@ func applyFillPlan(callback *tgbotapi.CallbackQuery, entry *pendingFillEntry) {
 		}
 	}
 
-	_, _ = tg.Bot.Send(tgbotapi.NewMessage(entry.ChatID, fmt.Sprintf("Готово: обновлено слотов: %d.", countSlots(entry.Items))))
-
-	// убираем клавиатуру у сообщения с кнопками
-	if callback.Message != nil {
-		strip := tgbotapi.NewEditMessageTextAndMarkup(
-			callback.Message.Chat.ID, callback.Message.MessageID,
-			callback.Message.Text,
-			tgbotapi.InlineKeyboardMarkup{InlineKeyboard: make([][]tgbotapi.InlineKeyboardButton, 0)},
-		)
-		_, _ = tg.Bot.Send(strip)
-	}
+	n := countSlots(entry.Items)
+	editFillPlanMessageFooter(callback, fmt.Sprintf("\n\n— Подтверждено. Заполнено слотов: %d.", n))
 }
 
 func countSlots(items []ResolvedFillItem) int {

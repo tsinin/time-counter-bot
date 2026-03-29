@@ -292,12 +292,12 @@ func createTimeKeyboardButtons(startHour, endHour int, callbackPrefix string) []
 
 func getScheduleMorningStartHourKeyboardMarkup() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
-		createTimeKeyboardButtons(0, 10, "start__schedule_morning_start_hour")...)
+		createTimeKeyboardButtons(6, 13, "start__schedule_morning_start_hour")...)
 }
 
 func getScheduleEveningFinishHourKeyboardMarkup() tgbotapi.InlineKeyboardMarkup {
-	rows := createTimeKeyboardButtons(15, 23, "start__schedule_evening_finish_hour")
-	rows = append(rows, createTimeKeyboardButtons(0, 1, "start__schedule_evening_finish_hour")...)
+	rows := createTimeKeyboardButtons(21, 23, "start__schedule_evening_finish_hour")
+	rows = append(rows, createTimeKeyboardButtons(0, 3, "start__schedule_evening_finish_hour")...)
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
 
